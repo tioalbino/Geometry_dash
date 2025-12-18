@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#111" />
+<title>Geometry Dash</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
+  body { background:#000; font-family:'Press Start 2P', cursive; overflow:hidden; }
+  canvas { display:block; width:100%; height:100%; }
+  .ui-layer { position:absolute; inset:0; pointer-events:none; z-index:10; }
+  .hud { padding:20px; display:flex; justify-content:space-between; color:#fff; font-size:12px; text-shadow:2px 2px #000; }
+  #abilityHud { position:absolute; bottom:20px; left:20px; font-size:10px; color:#ffff00; }
+  #shieldHud { position:absolute; bottom:40px; left:20px; font-size:10px; color:#00ffff; }
+  
+  .menu-overlay { position:absolute; inset:0; background:rgba(0,0,0,0.9); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:30; pointer-events:auto; color:#fff; }
+  h1 { font-size:24px; margin-bottom:20px; text-align:center; }
+  
+  .skin-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 15px; max-width: 90%; margin-bottom: 20px; }
+  .skin-card { background: #222; border: 3px solid #444; padding: 10px; width: 100px; text-align: center; cursor: pointer; transition: 0.2s; }
+  .skin-card.active { border-color: #fff; transform: scale(1.1); background: #333; }
+  .skin-box { width: 40px; height: 40px; margin: 0 auto 10px; border: 2px solid #000; }
+  .skin-info { font-size: 8px; line-height: 1.4; color: #aaa; }
+
+  .btn { background: #fff; color: #000; padding: 15px 40px; border: none; font-family: inherit; cursor: pointer; margin-top: 10px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="ui-layer">
+  <div class="hud">
+    <div id="scoreHud">00000</div>
+    <div id="bestHud">BEST: 0</div>
+  </div>
+  <div id="abilityHud">ABILITY: READY</div>
+  <div id="shieldHud">SHIELD: NONE</div>
+</div>
+
+<div class="menu-overlay" id="mainMenu">
+  <h1>ESCOLHA SUA SKIN</h1>
+  <div class="skin-list" id="skinList"></div>
+  <button class="btn" onclick="startGame()">START</button>
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let width, height;
+
+// Sistema de escudos
+const SHIELDS = {
+  'none': { name: 'NONE', durability: 0, color: null },
+  'silver': { name: 'SILVER', durability: 2, color: '#c0c0c0' },
+  'iron': { name: 'IRON', durability: 5, color: '#a0a0a0' },
+  'bronze': { name: 'BRONZE', durability: 7, color: '#cd7f32' },
+  'gold': { name: 'GOLD', durability: 8, color: '#ffd700' },
+  'diamond': { name: 'DIAMOND', durability: 10, color: '#b9f2ff' }
+};
+
+let currentShield = 'none';
+let shieldDurability = 0;
+
+const SKINS = {
+  '#00ffff': { name: 'AZUL', desc: 'CLASSIC\nEquilibrado', jump: -16, grav: 0.95, speedMod: 1, scoreMod: 1, life: 1, magnet: 0, scale: 1 },
+  '#00ff00': { name: 'VERDE', desc: 'TANK\nVida Extra\nPulo Pesado', jump: -14.5, grav: 1.1, speedMod: 1, scoreMod: 1, life: 2, magnet: 0, scale: 1.1 },
+  '#ff00ff': { name: 'ROSA', desc: 'FLOAT\nGrav. Baixa\nAcelera Rápido', jump: -15, grav: 0.6, speedMod: 1.2, scoreMod: 1, life: 1, magnet: 0, scale: 1 },
+  '#ffffff': { name: 'BRANCO', desc: 'TURBO\nSuper Veloz\nScore x2', jump: -17, grav: 1.1, speedMod: 1.6, scoreMod: 2, life: 1, magnet: 0, scale: 0.9 },
+  '#222222': { name: 'PRETO', desc: 'GHOST\nHitbox Mini\nSem Moedas', jump: -16, grav: 0.95, speedMod: 1, scoreMod: 1, life: 1, magnet: 0, scale: 0.6 },
+  '#ffff00': { name: 'AMARELO', desc: 'MANTRA\nImã Moedas\nVida Frágil', jump: -16, grav: 0.95, speedMod: 1, scoreMod: 1, life: 1, magnet: 200, scale: 1 }
+};
+
+let currentSkin = localStorage.getItem('ad_skin_v2') || '#00ffff';
+let state = { running: false, score: 0, high: parseInt(localStorage.getItem('ad_best')) || 0, speed: 10, frame: 0, shake: 0, lives: 1 };
+let player, obstacles = [], particles = [], ruins = [];
+
+function resize() {
+  width = window.innerWidth; height = window.innerHeight;
+  canvas.width = width; canvas.height = height;
+  state.groundY = height - 80;
+}
+window.addEventListener('resize', resize); resize();
+
+// UI de Skins
+const skinListDiv = document.getElementById('skinList');
+Object.keys(SKINS).forEach(color => {
+  const s = SKINS[color];
+  const card = document.createElement('div');
+  card.className = `skin-card ${color === currentSkin ? 'active' : ''}`;
+  card.innerHTML = `<div class="skin-box" style="background:${color}"></div>
+                    <div style="font-size:10px; margin-bottom:5px">${s.name}</div>
+                    <div class="skin-info">${s.desc.replace('\n', '<br>')}</div>`;
+  card.onclick = () => {
+    document.querySelectorAll('.skin-card').forEach(c => c.classList.remove('active'));
+    card.classList.add('active');
+    currentSkin = color;
+    localStorage.setItem('ad_skin_v2', color);
+  };
+  skinListDiv.appendChild(card);
+});
+
+// Sistema de escudos - geração aleatória
+function spawnShield() {
+  // Chance de 2% por frame para spawnar escudo
+  if (state.frame % 60 === 0 && Math.random() < 0.02) {
+    const shieldTypes = Object.keys(SHIELDS).filter(s => s !== 'none');
+    const randomShield = shieldTypes[Math.floor(Math.random() * shieldTypes.length)];
+    
+    obstacles.push({
+      x: width + 100,
+      y: state.groundY - 80,
+      w: 35,
+      h: 35,
+      type: 'shield',
+      shieldType: randomShield,
+      color: SHIELDS[randomShield].color,
+      passed: false
+    });
+  }
+}
+
+// Aplicar escudo
+function applyShield(type) {
+  currentShield = type;
+  shieldDurability = SHIELDS[type].durability;
+  document.getElementById('shieldHud').innerText = `SHIELD: ${SHIELDS[type].name} (${shieldDurability})`;
+  playTone(800, 'sine', 0.2, 0.1);
+}
+
+// Atualizar HUD do escudo
+function updateShieldHud() {
+  if (currentShield === 'none' || shieldDurability <= 0) {
+    document.getElementById('shieldHud').innerText = 'SHIELD: NONE';
+  } else {
+    document.getElementById('shieldHud').innerText = `SHIELD: ${SHIELDS[currentShield].name} (${shieldDurability})`;
+  }
+}
+
+// Audio Simples
+const playTone = (f, t, d, v) => {
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const o = ac.createOscillator(); const g = ac.createGain();
+  o.type = t; o.frequency.value = f; g.gain.value = v;
+  o.connect(g); g.connect(ac.destination);
+  o.start(); o.stop(ac.currentTime + d);
+};
+
+class Player {
+  constructor() {
+    this.size = 40; this.reset();
+  }
+  reset() {
+    const s = SKINS[currentSkin];
+    this.x = 80; this.y = state.groundY - this.size; this.dy = 0; this.rot = 0;
+    this.color = currentSkin; this.onGround = false;
+    this.config = s; state.lives = s.life;
+  }
+  jump() {
+    if (this.onGround) {
+      this.dy = this.config.jump; this.onGround = false;
+      playTone(300, 'square', 0.1, 0.1);
+    }
+  }
+  update() {
+    this.dy += this.config.grav; this.y += this.dy;
+    const realSize = this.size * this.config.scale;
+    
+    if (this.y > state.groundY - realSize) {
+      this.y = state.groundY - realSize; this.dy = 0; this.onGround = true;
+      this.rot = Math.round(this.rot/90)*90;
+    } else {
+      this.rot += 10;
+    }
+  }
+  draw() {
+    const s = this.size * this.config.scale;
+    ctx.save();
+    ctx.translate(this.x + s/2, this.y + s/2);
+    ctx.rotate(this.rot * Math.PI/180);
+    
+    // Desenhar escudo se tiver
+    if (currentShield !== 'none' && shieldDurability > 0) {
+      const shieldSize = s + 10;
+      ctx.strokeStyle = SHIELDS[currentShield].color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, shieldSize/2, 0, Math.PI * 2);
+      ctx.stroke();
+      
+      // Efeito de brilho no escudo
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = SHIELDS[currentShield].color;
+    }
+    
+    // Desenhar jogador
+    ctx.shadowBlur = 15; ctx.shadowColor = this.color;
+    ctx.fillStyle = this.color;
+    ctx.fillRect(-s/2, -s/2, s, s);
+    ctx.fillStyle = '#000'; ctx.fillRect(-s/4, -s/4, s/2, s/2);
+    ctx.restore();
+  }
+}
+
+function spawnObstacle() {
+  if (state.frame % 60 === 0) {
+    const type = Math.random() > 0.3 ? 'spike' : 'platform';
+    obstacles.push({
+      x: width + 100, y: type === 'spike' ? state.groundY - 40 : state.groundY - 120,
+      w: type === 'spike' ? 40 : 150, h: 40, type, passed: false
+    });
+  }
+  if (state.frame % 45 === 0 && currentSkin !== '#222222') {
+    obstacles.push({ x: width + 100, y: state.groundY - 100, w: 30, h: 30, type: 'coin' });
+  }
+}
+
+function update() {
+  if (!state.running) return;
+  state.frame++;
+  state.score += state.config.scoreMod;
+  state.speed = (11 + state.score/500) * state.config.speedMod;
+
+  player.update();
+  spawnObstacle();
+  spawnShield(); // Spawn de escudos
+
+  obstacles.forEach((ob, i) => {
+    // Imã de moedas (Skin Amarela)
+    if (ob.type === 'coin' && state.config.magnet > 0) {
+      const dist = Math.hypot(player.x - ob.x, player.y - ob.y);
+      if (dist < state.config.magnet) {
+        ob.y += (player.y - ob.y) * 0.1;
+        ob.x += (player.x - ob.x) * 0.1;
+      }
+    }
+
+    ob.x -= state.speed;
+    const pSize = player.size * player.config.scale;
+    const hit = player.x < ob.x + ob.w && player.x + pSize > ob.x && player.y < ob.y + ob.h && player.y + pSize > ob.y;
+
+    if (hit) {
+      if (ob.type === 'coin') {
+        playTone(1000, 'sine', 0.05, 0.1);
+        obstacles.splice(i, 1);
+      } else if (ob.type === 'shield') {
+        applyShield(ob.shieldType);
+        obstacles.splice(i, 1);
+      } else if (ob.type === 'spike' || ob.type === 'platform') {
+        // Verificar colisão com plataforma
+        if (ob.type === 'platform') {
+          // Aterrissar na plataforma
+          if (player.y + pSize <= ob.y + 5 && player.dy > 0) {
+            player.y = ob.y - pSize;
+            player.dy = 0;
+            player.onGround = true;
+            return;
+          }
+        }
+        
+        // Se chegou aqui, é colisão de dano
+        takeDamage();
+      }
+    }
+    if (ob.x < -200) obstacles.splice(i, 1);
+  });
+
+  draw();
+  requestAnimationFrame(update);
+}
+
+function takeDamage() {
+  // Verificar se tem escudo ativo
+  if (currentShield !== 'none' && shieldDurability > 0) {
+    shieldDurability--;
+    updateShieldHud();
+    
+    if (shieldDurability <= 0) {
+      currentShield = 'none';
+      playTone(400, 'square', 0.3, 0.2);
+      document.getElementById('abilityHud').innerText = "SHIELD BROKEN!";
+      setTimeout(() => {
+        if (state.running) document.getElementById('abilityHud').innerText = "ABILITY: " + state.config.name;
+      }, 1000);
+    } else {
+      playTone(600, 'sine', 0.1, 0.1);
+      return; // Escudo absorveu o dano
+    }
+  }
+  
+  // Se não tem escudo ou escudo quebrou, toma dano normal
+  state.lives--;
+  state.shake = 20;
+  
+  if (state.lives <= 0) {
+    state.running = false;
+    playTone(100, 'sawtooth', 0.3, 0.2);
+    if (Math.floor(state.score/10) > state.high) {
+      state.high = Math.floor(state.score/10);
+      localStorage.setItem('ad_best', state.high);
+    }
+    setTimeout(() => document.getElementById('mainMenu').classList.remove('hidden'), 500);
+  } else {
+    playTone(200, 'square', 0.2, 0.2);
+    obstacles = []; // Limpa tela para dar chance
+    document.getElementById('abilityHud').innerText = "HIT!";
+    setTimeout(() => {
+      if (state.running) document.getElementById('abilityHud').innerText = "ABILITY: " + state.config.name;
+    }, 1000);
+  }
+}
+
+function draw() {
+  // Fundo Dinâmico baseado na cor da Skin
+  const c = player.color;
+  const grd = ctx.createLinearGradient(0,0,0,height);
+  grd.addColorStop(0, '#050505'); grd.addColorStop(1, c + '33');
+  ctx.fillStyle = grd; ctx.fillRect(0,0,width,height);
+
+  // Ruínas parallax
+  ctx.fillStyle = c + '11';
+  ruins.forEach(r => {
+    r.x -= state.speed * 0.2;
+    if (r.x + r.w < 0) r.x = width;
+    ctx.fillRect(r.x, state.groundY - r.h, r.w, r.h);
+  });
+
+  // Chão
+  ctx.fillStyle = '#000'; ctx.fillRect(0, state.groundY, width, 80);
+  ctx.strokeStyle = c; ctx.lineWidth = 4;
+  ctx.strokeRect(-10, state.groundY, width+20, 5);
+
+  player.draw();
+  obstacles.forEach(ob => {
+    if (ob.type === 'coin') {
+      ctx.fillStyle = '#ff0';
+      ctx.shadowBlur = 10; ctx.shadowColor = '#ff0';
+      ctx.beginPath();
+      ctx.arc(ob.x + ob.w/2, ob.y + ob.h/2, ob.w/2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (ob.type === 'shield') {
+      ctx.fillStyle = ob.color;
+      ctx.shadowBlur = 15; ctx.shadowColor = ob.color;
+      ctx.beginPath();
+      ctx.arc(ob.x + ob.w/2, ob.y + ob.h/2, ob.w/2, 0, Math.PI * 2);
+      ctx.fill();
+      // Desenhar símbolo de escudo
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.moveTo(ob.x + ob.w/2, ob.y + 10);
+      ctx.lineTo(ob.x + 10, ob.y + ob.h - 10);
+      ctx.lineTo(ob.x + ob.w/2, ob.y + ob.h - 5);
+      ctx.lineTo(ob.x + ob.w - 10, ob.y + ob.h - 10);
+      ctx.closePath();
+      ctx.fill();
+    } else if (ob.type === 'spike') {
+      ctx.fillStyle = '#f00';
+      ctx.shadowBlur = 10; ctx.shadowColor = '#f00';
+      ctx.beginPath();
+      ctx.moveTo(ob.x, ob.y + ob.h);
+      ctx.lineTo(ob.x + ob.w/2, ob.y);
+      ctx.lineTo(ob.x + ob.w, ob.y + ob.h);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.fillStyle = '#444';
+      ctx.shadowBlur = 10; ctx.shadowColor = '#444';
+      ctx.fillRect(ob.x, ob.y, ob.w, ob.h);
+    }
+    ctx.shadowBlur = 0;
+  });
+
+  document.getElementById('scoreHud').innerText = Math.floor(state.score/10).toString().padStart(5, '0');
+}
+
+function startGame() {
+  resize();
+  state.config = SKINS[currentSkin];
+  player = new Player();
+  obstacles = []; state.score = 0; state.frame = 0;
+  currentShield = 'none';
+  shieldDurability = 0;
+  
+  ruins = Array.from({length:10}, (_,i)=>({
+    x:i*200, 
+    w:100+Math.random()*100, 
+    h:50+Math.random()*200
+  }));
+  
+  document.getElementById('mainMenu').classList.add('hidden');
+  document.getElementById('bestHud').innerText = "BEST: " + state.high;
+  document.getElementById('abilityHud').innerText = "ABILITY: " + state.config.name;
+  updateShieldHud();
+  state.running = true;
+  update();
+}
+
+// Input
+const jumpEvent = (e) => { 
+  if(e.cancelable) e.preventDefault(); 
+  if(state.running) player.jump(); 
+};
+canvas.addEventListener('touchstart', jumpEvent, {passive:false});
+window.addEventListener('mousedown', jumpEvent);
+window.addEventListener('keydown', e => { 
+  if(e.code==='Space') jumpEvent(e); 
+  // Debug: Tecla 'S' spawna escudo diamante
+  if(e.code==='KeyS' && state.running) applyShield('diamond');
+});
+
+</script>
+</body>
+</html>
